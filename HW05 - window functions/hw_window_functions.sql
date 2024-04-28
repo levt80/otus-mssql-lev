@@ -28,7 +28,7 @@ USE WideWorldImporters
 -------------+----------------------------
 Дата продажи | Нарастающий итог по месяцу
 -------------+----------------------------
- 2015-01-29   | 4801725.31
+ 2015-01-29  | 4801725.31
  2015-01-30	 | 4801725.31
  2015-01-31	 | 4801725.31
  2015-02-01	 | 9626342.98
@@ -38,20 +38,45 @@ USE WideWorldImporters
 Нарастающий итог должен быть без оконной функции.
 */
 
-with sales as (
+with
+MonthSales as (
     select 
-        Invoices.InvoiceDate as [Дата продажи], 
-        sum(InvoiceLines.Quantity*InvoiceLines.UnitPrice) as [Сумма Продажи]
+        DATETRUNC(mm,Invoices.InvoiceDate) as calmonth,
+        sum(InvoiceLines.Quantity*InvoiceLines.UnitPrice) as MonthSalesSum
     from Sales.Invoices
     join Sales.InvoiceLines on Invoices.InvoiceID = InvoiceLines.InvoiceID
     where Invoices.InvoiceDate >= '2015-01-01'
-    group by Invoices.InvoiceDate
+    group by 
+        DATETRUNC(mm,Invoices.InvoiceDate)
+),
+AccruedSales as (
+    select top 100 percent
+        calmonth,
+        MonthSalesSum,
+        (select Sum(MonthSalesSum) from MonthSales as ms1 where ms1.calmonth<=ms.calmonth) as AccruedSalesSum
+    from MonthSales as ms
+    order by 1
 )
+
 select 
-    [Дата продажи], 
-    (select sum([Сумма Продажи]) from sales as s1 where month(s.[Дата продажи]) = month(s1.[Дата продажи])) as [Нарастающий итог по месяцу]
-from sales as s
-order by 1;
+    Invoices.InvoiceID,
+    [Customers].CustomerName,
+    Invoices.InvoiceDate as [Дата продажи], 
+    sum(InvoiceLines.Quantity*InvoiceLines.UnitPrice) as [Сумма Продажи],
+    max(AccruedSales.MonthSalesSum) as [Итог за месяц],
+    max(AccruedSales.AccruedSalesSum) as  [Нарастающий итог по месяцу]
+from Sales.Invoices
+join Sales.InvoiceLines on Invoices.InvoiceID = InvoiceLines.InvoiceID
+join [Sales].[Customers] on Invoices.CustomerID = Customers.CustomerID
+join AccruedSales on DATETRUNC(mm,Invoices.InvoiceDate) = AccruedSales.calmonth
+group by 
+    Invoices.InvoiceID,
+    [Customers].CustomerName,
+    Invoices.InvoiceDate,
+    AccruedSales.MonthSalesSum,
+    AccruedSales.AccruedSalesSum
+order by [Дата продажи]
+
 
 /*
 2. Сделайте расчет суммы нарастающим итогом в предыдущем запросе с помощью оконной функции.
@@ -59,13 +84,22 @@ order by 1;
 */
 
 select 
+    Invoices.InvoiceID,
+    [Customers].CustomerName,
     Invoices.InvoiceDate as [Дата продажи], 
-    sum(sum(InvoiceLines.Quantity*InvoiceLines.UnitPrice)) over (partition by month(Invoices.InvoiceDate)) as [Нарастающий итог по месяцу]
+    sum(InvoiceLines.Quantity*InvoiceLines.UnitPrice) as [Сумма Продажи],
+    sum(sum(InvoiceLines.Quantity*InvoiceLines.UnitPrice)) over (partition by DATETRUNC(mm,Invoices.InvoiceDate)) as [Итог за месяц],
+    sum(sum(InvoiceLines.Quantity*InvoiceLines.UnitPrice)) over (order by DATETRUNC(mm,Invoices.InvoiceDate) asc range UNBOUNDED PRECEDING) as [Нарастающий итог по месяцу]
 from Sales.Invoices
 join Sales.InvoiceLines on Invoices.InvoiceID = InvoiceLines.InvoiceID
+join [Sales].[Customers] on Invoices.CustomerID = Customers.CustomerID
 where Invoices.InvoiceDate >= '2015-01-01'
-group by Invoices.InvoiceDate
-order by 1;
+group by 
+    Invoices.InvoiceID,
+    [Customers].CustomerName,
+    Invoices.InvoiceDate
+order by [Дата продажи]
+;
 
 /*
 3. Вывести список 2х самых популярных продуктов (по количеству проданных) 
@@ -139,15 +173,15 @@ from (
         Invoices.SalespersonPersonID, 
         sm.FullName as Salesman, 
         Invoices.CustomerID, 
-        cust.FullName as Customer,
+        cust.[CustomerName] as Customer,
         Invoices.InvoiceDate, 
         sum(InvoiceLines.Quantity*InvoiceLines.UnitPrice) as InvoiceSum,
         ROW_NUMBER() over (partition by Invoices.SalespersonPersonID order by Invoices.InvoiceDate desc) as rn
     from Sales.Invoices
     join Sales.InvoiceLines on Invoices.InvoiceID = InvoiceLines.InvoiceID
     join Application.People as sm on SalespersonPersonID = sm.PersonID
-    join Application.People as cust on CustomerID = cust.PersonID
-    group by SalespersonPersonID, sm.FullName, CustomerID, cust.FullName, InvoiceDate
+    join [Sales].[Customers] as cust on Invoices.CustomerID = cust.CustomerID
+    group by SalespersonPersonID, sm.FullName, Invoices.CustomerID, cust.[CustomerName], InvoiceDate
 ) as t
 where rn = 1
 
@@ -165,16 +199,16 @@ select
 from (
     select 
         Invoices.CustomerID,
-        cust.FullName as Customer,
+        cust.[CustomerName] as Customer,
         InvoiceLines.StockItemID,
         InvoiceLines.UnitPrice,
         max(Invoices.InvoiceDate) as InvoiceDate,
         ROW_NUMBER() over (partition by Invoices.CustomerID order by InvoiceLines.UnitPrice desc) as rn
     from Sales.Invoices
     join Sales.InvoiceLines on Invoices.InvoiceID = InvoiceLines.InvoiceID
-    join Application.People as cust on CustomerID = cust.PersonID
+    join [Sales].[Customers] as cust on Invoices.CustomerID = cust.CustomerID
     group by Invoices.CustomerID,
-        cust.FullName,
+        cust.[CustomerName],
         InvoiceLines.StockItemID,
         InvoiceLines.UnitPrice
 ) as t
